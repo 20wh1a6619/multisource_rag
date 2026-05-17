@@ -67,7 +67,8 @@ def load_vector_store():
 
 def ask_question(vector_store, query, mode="Normal Q&A"):
 
-    llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = os.getenv("GROQ_API_KEY"))
+    # llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = st.secrets["GROQ_API_KEY"]
 
     retrieved_docs = vector_store.similarity_search(query, k = 4)
     context = "\n\n".join([doc.page_content for doc in retrieved_docs])

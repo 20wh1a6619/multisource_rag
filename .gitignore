@@ -3,3 +3,4 @@ __pycache__/
 faiss_index/
 repos/
 .env
+data/

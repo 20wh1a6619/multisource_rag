@@ -15,9 +15,14 @@ import streamlit as st
 
 load_dotenv() 
 
-text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap = 200)
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size = 500,
+    chunk_overlap = 100
+)
 
-embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+embedding_model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 
 # def create_vector_store(text_data):
 #     documents = []
@@ -37,88 +42,160 @@ embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-Mi
 
 @st.cache_resource
 def create_vector_store(text_data):
+
     documents = []
-    for item in text_data:
+
+    for idx, item in enumerate(text_data):
+
         documents.append(
             Document(
                 page_content=item["content"],
-                metadata={"source": item["source"]}
+                metadata={
+                    "source": item["source"],
+                    "chunk_id": idx
+                }
             )
         )
+
+    # Chunking
     chunks = text_splitter.split_documents(documents)
+
     vector_store = FAISS.from_documents(
         chunks,
         embedding_model
     )
+
     vector_store.save_local("faiss_index")
+
     return vector_store
 
+
 def load_vector_store():
+
     if os.path.exists("faiss_index"):
+
         vector_store = FAISS.load_local(
             "faiss_index",
             embedding_model,
             allow_dangerous_deserialization=True
         )
+
         return vector_store
+
     return None
+
 
 # Retrieval 
 
 def ask_question(vector_store, query, mode="Normal Q&A"):
 
-    # llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = os.getenv("GROQ_API_KEY"))
-    llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = st.secrets["GROQ_API_KEY"])
+    try:
 
-    retrieved_docs = vector_store.similarity_search(query, k = 4)
-    context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+        # llm = ChatGroq(
+        #     model="llama-3.1-8b-instant",
+        #     api_key=os.getenv("GROQ_API_KEY")
+        # )
 
-    sources = list(set(
-        [doc.metadata["source"] for doc in retrieved_docs]
-    ))
+        llm = ChatGroq(model = "llama-3.1-8b-instant", api_key = st.secrets["GROQ_API_KEY"])
 
-    if mode == "Beginner Explanation":
-        instruction = "Explain in very simple beginner-friendly language."
+        # retrieved_docs = vector_store.similarity_search(query, k = 4)
 
-    elif mode == "Interview Questions":
-        instruction = "Generate technical interview questions with answers from the context."
+        retriever = vector_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": 5}
+        )
 
-    elif mode == "Summarization":
-        instruction = "Provide a concise technical summary."
+        retrieved_docs = retriever.invoke(query)
 
-    elif mode == "Comparison":
-        instruction = "Compare concepts clearly with differences."
-    chat_history = ""
+        if not retrieved_docs:
+            return (
+                "I could not find relevant information in the provided sources.",
+                []
+            )
 
-    if "messages" in st.session_state:
-        for msg in st.session_state.messages[-4:]:
+        context = "\n\n".join([
+            doc.page_content for doc in retrieved_docs
+        ])
+        if not context.strip():
+            return (
+        "Please upload PDFs or website URLs before asking questions.",
+        [])
 
-            chat_history += f"""
-            {msg['role']}:
-            {msg['content']}
-            """
+        sources = list(set(
+            [doc.metadata["source"] for doc in retrieved_docs]
+        ))
 
-    prompt = f"""
-    You are an AI Developer Knowledge Assistant.
-    If answer is not explicitly present in context, say you could not find the information. Do not generate assumptions.
-    {instruction}
-    Previous Conversation History: {chat_history}
-    Context: {context}
-    Question: {query} 
-    """
+        instruction = "Answer clearly and accurately."
 
-    response = llm.invoke(prompt)
+        if mode == "Beginner Explanation":
+            instruction = "Explain in very simple beginner-friendly language."
 
-    source_chunks = []
+        elif mode == "Interview Questions":
+            instruction = "Generate technical interview questions with answers from the context."
 
-    for doc in retrieved_docs:
+        elif mode == "Summarization":
+            instruction = "Provide a concise technical summary."
 
-        source_chunks.append({
-            "source": doc.metadata["source"],
-            "content": doc.page_content[:300]
-        })
+        elif mode == "Comparison":
+            instruction = "Compare concepts clearly with differences."
 
-    return response.content, source_chunks
+        chat_history = ""
+
+        if "messages" in st.session_state:
+
+            for msg in st.session_state.messages[-4:]:
+
+                chat_history += f"""
+                {msg['role']}:
+                {msg['content']}
+                """
+
+        prompt = f"""
+        You are an AI Developer Knowledge Assistant.
+
+        Rules:
+        - Answer ONLY from the provided context
+        - If information is missing, say:
+        "I could not find the information in the provided sources."
+        - Do not hallucinate
+        - Keep answers structured and concise
+        - Use bullet points when appropriate
+        - Explain technical concepts clearly
+        - Mention important technical details when available
+
+        Mode:
+        {instruction}
+
+        Previous Conversation History:
+        {chat_history}
+
+        Context:
+        {context}
+
+        Question:
+        {query}
+        """
+
+        response = llm.invoke(prompt)
+
+        source_chunks = []
+
+        for doc in retrieved_docs:
+
+            source_chunks.append({
+                "source": doc.metadata["source"],
+                "content": doc.page_content[:300]
+            })
+
+        return response.content, source_chunks
+
+    except Exception as e:
+
+        return (
+            f"Error generating response: {str(e)}",
+            []
+        )
+
 
 # Answer ONLY from provided context. If info is missing, say you couldn't find it. Do not hallucinate.
 # Answer ONLY using the provided context.
@@ -129,3 +206,5 @@ def ask_question(vector_store, query, mode="Normal Q&A"):
 #     - If information is missing, say you could not find it.
 #     - Do not hallucinate.
 #     - Mention important technical details.
+
+
